@@ -2,7 +2,7 @@
 /**
  * Stellar Scout MCP Server
  *
- * Exposes stellarlight.xyz's 19 public APIs as MCP tools so any MCP-compatible
+ * Exposes stellarlight.xyz's public APIs as MCP tools so any MCP-compatible
  * client (Claude desktop, Cursor, ChatGPT custom GPTs, Gemini, Cline, Continue,
  * Zed, etc.) can call them as native function calls.
  *
@@ -90,10 +90,17 @@ function asToolResult(
 	result:
 		| { ok: true; data: unknown }
 		| { ok: false; error: string; status?: number },
+	// true for a view=compact call: the JSON without indentation.
+	compact = false,
 ): { content: { type: "text"; text: string }[]; isError?: boolean } {
 	if (result.ok) {
 		return {
-			content: [{ type: "text", text: JSON.stringify(result.data, null, 2) }],
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify(result.data, null, compact ? 0 : 2),
+				},
+			],
 		};
 	}
 	return {
@@ -117,7 +124,7 @@ server.registerTool(
 	{
 		title: "Search the Stellar research corpus",
 		description:
-			"Semantic search over the Stellar knowledge corpus — SDF blog, SCF Handbook, SEPs/standards, dev docs, papers, audits, incident reports. Returns cited text chunks with source, section, URL, confidence (audits add auditor/severity). THE surface for 'how does X work', 'what does the SEP/spec/audit say', and how-to/feasibility questions. Not for products and their funding/status → use search_projects.",
+			"Semantic search over the Stellar knowledge corpus: SDF blog, SCF Handbook, SEPs/standards, dev docs, papers, audits, incident reports. Returns cited text chunks with source, section, URL, confidence (audits add auditor/severity). THE surface for 'how does X work', 'what does the SEP/spec/audit say', and how-to/feasibility questions. Not for products and their funding/status → use search_projects.",
 		inputSchema: {
 			query: z.string().min(2).describe("Natural-language search query."),
 			source: z
@@ -128,6 +135,7 @@ server.registerTool(
 					"scf-handbook",
 					"sep",
 					"cap",
+					"slp",
 					"dev-docs",
 					"paper",
 					"scf-proposal",
@@ -143,13 +151,13 @@ server.registerTool(
 				])
 				.optional()
 				.describe(
-					"Optional source filter. Use 'audit' for security questions, 'incident' for exploit/post-mortem history, 'security-program' for bug-bounty / vulnerability-disclosure program status (which program is current, where to report), 'sdf-org' for SDF's canonical organizational pages (mandate, legal structure/terms, foundation, team, enterprise fund, quarterly-reports index), 'ec-developer-report' for ecosystem stats, 'paper' for foundational protocol questions, 'release' for stellar-core/CLI/SDK release notes (what shipped, when — protocol upgrade tags).",
+					"Optional source filter. Use 'audit' for security questions, 'incident' for exploit/post-mortem history, 'security-program' for bug-bounty / vulnerability-disclosure program status (which program is current, where to report), 'sdf-org' for SDF's canonical organizational pages (mandate, legal structure/terms, foundation, team, enterprise fund, quarterly-reports index), 'ec-developer-report' for ecosystem stats, 'paper' for foundational protocol questions, 'slp' for Stellar Limits Proposals, the network configuration votes (Soroban resource limit changes, and the Quorum Freeze of exploit accounts in SLP-0006 and SLP-0008; each row opens with the proposal's number, status and creation date), 'release' for stellar-core/CLI/SDK release notes (what shipped, when; protocol upgrade tags).",
 				),
 			auditor: z
 				.string()
 				.optional()
 				.describe(
-					"Audit-metadata filter: exact auditor firm (case-insensitive, e.g. OtterSec). Implies source=audit — retrieval is scoped to audit chunks.",
+					"Audit-metadata filter: exact auditor firm (case-insensitive, e.g. OtterSec). Implies source=audit: retrieval is scoped to audit chunks.",
 				),
 			protocol: z
 				.string()
@@ -190,7 +198,7 @@ server.registerTool(
 	{
 		title: "List Stellar security-audit reports",
 		description:
-			"Enumerable registry of Stellar security-audit reports — one row per report (normalized auditor, publication date, verified directory-project link). Answers 'list all audits for project X', 'what has firm Y audited on Stellar', 'newest Soroban audits'. Absence of a report = no audit ON RECORD at our source, NOT a claim the project is unaudited; findingsTotal/severityCounts null = not extracted, NOT zero. For what an audit FOUND (findings text) → search_research with source=audit.",
+			"Enumerable registry of Stellar security-audit reports: one row per report (normalized auditor, publication date, verified directory-project link). Answers 'list all audits for project X', 'what has firm Y audited on Stellar', 'newest Soroban audits'. Absence of a report = no audit ON RECORD at our source, NOT a claim the project is unaudited; findingsTotal/severityCounts null = not extracted, NOT zero. For what an audit FOUND (findings text) → search_research with source=audit.",
 		inputSchema: {
 			project: z
 				.string()
@@ -238,7 +246,7 @@ server.registerTool(
 	{
 		title: "List Stellar hackathons",
 		description:
-			"Browse/LIST Stellar hackathon events — a merged, de-duplicated curated + live DoraHacks feed (dates, status, organizer, prize pools), sorted upcoming→active→completed then newest-first. The entry point for event slugs; zero-result forward-looking queries return `meta.fallbackChannels` (surface them, don't dead-end). Not for one event's winners/submissions/tracks → use get_hackathon.",
+			"Browse/LIST Stellar hackathon events: a merged, de-duplicated curated + live DoraHacks feed (dates, status, organizer, prize pools), sorted upcoming→active→completed then newest-first. The entry point for event slugs; zero-result forward-looking queries return `meta.fallbackChannels` (surface them, don't dead-end). Not for one event's winners/submissions/tracks → use get_hackathon.",
 		inputSchema: {
 			status: z
 				.enum(["upcoming", "active", "completed"])
@@ -248,7 +256,7 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe(
-					"Free-text event lookup — matches event name + organizer, so a NAMED event ('agents', 'kale') resolves directly without paging the catalog.",
+					"Free-text event lookup: matches event name + organizer, so a NAMED event ('agents', 'kale') resolves directly without paging the catalog.",
 				),
 			organizer: z
 				.string()
@@ -269,9 +277,12 @@ server.registerTool(
 				.describe("Max results (default 20)."),
 		},
 	},
-	async ({ status, organizer, source, limit }) => {
+	async ({ status, q, organizer, source, limit }) => {
 		const params = new URLSearchParams();
 		if (status) params.set("status", status);
+		// Declared above since the API learned ?q=, but never forwarded: a named
+		// event lookup silently returned the whole catalog.
+		if (q) params.set("q", q);
 		if (organizer) params.set("organizer", organizer);
 		if (source) params.set("source", source);
 		if (limit !== undefined) params.set("limit", String(limit));
@@ -281,28 +292,71 @@ server.registerTool(
 	},
 );
 
+// The filters search_hackathon_builds and analyze_hackathon_submissions share,
+// the same list the API parses once (src/lib/hackathon-build-query.ts).
+const BUILD_FILTER_INPUTS = {
+	q: z
+		.string()
+		.optional()
+		.describe("Topic: matches build names, summaries and write-ups."),
+	mode: z
+		.enum(["keyword", "meaning", "hybrid"])
+		.optional()
+		.describe(
+			"How q matches: keyword, meaning (vector similarity) or hybrid (both). Default: hybrid for search_hackathon_builds, keyword for analyze_hackathon_submissions.",
+		),
+	winnersOnly: z.boolean().optional().describe("Only prize-winning builds."),
+	hackathon: z
+		.string()
+		.optional()
+		.describe("Only these events: one slug or up to 10, comma-separated."),
+	track: z
+		.string()
+		.optional()
+		.describe("Filter by hackathon track (substring match)."),
+	category: z
+		.string()
+		.optional()
+		.describe(
+			"Only builds sorted into this directory project type (Payments, DEX, AI...).",
+		),
+	package: z
+		.string()
+		.optional()
+		.describe(
+			"Only builds whose repo declares this Stellar package (passkey-kit, soroban-sdk).",
+		),
+};
+
+function buildFilterParams(f: {
+	q?: string;
+	mode?: string;
+	winnersOnly?: boolean;
+	hackathon?: string;
+	track?: string;
+	category?: string;
+	package?: string;
+}): URLSearchParams {
+	const params = new URLSearchParams();
+	if (f.q) params.set("q", f.q);
+	if (f.mode) params.set("mode", f.mode);
+	if (f.winnersOnly) params.set("winnersOnly", "1");
+	if (f.hackathon) params.set("hackathon", f.hackathon);
+	if (f.track) params.set("track", f.track);
+	if (f.category) params.set("category", f.category);
+	if (f.package) params.set("package", f.package);
+	return params;
+}
+
 // 2b. search_hackathon_builds — prior-art over hackathon prototypes
 server.registerTool(
 	"search_hackathon_builds",
 	{
 		title: "Search what was built at Stellar hackathons",
 		description:
-			"Prior-art over hackathon PROTOTYPES: topic search across every submission ('buidl') from all Stellar hackathons (DoraHacks) — most never become directory projects. Answers 'has anyone already built X at a hackathon?' with each build's name, description, event, placement/award, votes, and repo/demo links. `winnersOnly` restricts to prize winners; `track` filters by track. An empty result is a real whitespace signal. For SHIPPED products in the directory → use search_projects.",
+			"Prior-art over hackathon PROTOTYPES: topic search across every stored submission ('buidl') from Stellar hackathons: every DoraHacks submission plus curated ones from events off DoraHacks (winners named by their own pages, and HackMeridian 2026's partial list from HackProof, each with its entryBasis), most of which never become directory projects. Answers 'has anyone already built X at a hackathon?' with each build's name, description, event, placement, repo/demo links, categories and stack. Filters: winnersOnly, hackathon (event slugs), track, category (a directory project type), package (a Stellar package the repo declares). An event named in full in q (its title or slug) becomes the hackathon filter and meta.inferredFilter says so; pass hackathon to choose the event yourself, or hackathon as an empty string to search the name as words in every event. For counts and trends → use analyze_hackathon_submissions; for SHIPPED products → use search_projects.",
 		inputSchema: {
-			q: z
-				.string()
-				.optional()
-				.describe(
-					"Topic to search build names + descriptions (prior-art lookup).",
-				),
-			winnersOnly: z
-				.boolean()
-				.optional()
-				.describe("Only prize-winning builds."),
-			track: z
-				.string()
-				.optional()
-				.describe("Filter by hackathon track (substring match)."),
+			...BUILD_FILTER_INPUTS,
 			limit: z
 				.number()
 				.int()
@@ -310,14 +364,22 @@ server.registerTool(
 				.max(100)
 				.optional()
 				.describe("Max builds (default 20)."),
+			offset: z
+				.number()
+				.int()
+				.min(0)
+				.optional()
+				.describe(
+					"Builds to skip, for reading past the first page: page until offset + meta.counts.returned reaches meta.counts.matched (default 0).",
+				),
 		},
 	},
-	async ({ q, winnersOnly, track, limit }) => {
-		const params = new URLSearchParams();
-		if (q) params.set("q", q);
-		if (winnersOnly) params.set("winnersOnly", "1");
-		if (track) params.set("track", track);
+	async ({ limit, offset, ...filters }) => {
+		const params = buildFilterParams(filters);
+		// An empty hackathon is the opt-out from reading an event named in q.
+		if (filters.hackathon === "") params.set("hackathon", "");
 		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
 		const qs = params.toString();
 		const result = await callScout(
 			`/api/hackathons/builds${qs ? `?${qs}` : ""}`,
@@ -326,13 +388,101 @@ server.registerTool(
 	},
 );
 
+// 2c. analyze_hackathon_submissions: counts, trends and winner comparisons
+server.registerTool(
+	"analyze_hackathon_submissions",
+	{
+		title: "Trends and counts across Stellar hackathon submissions",
+		description:
+			"Counts any facet of every stored Stellar hackathon submission: category (directory project types), library or package (Stellar SDKs a repo declares), activity (commits on the submitted repo 90+ days after the event), project (became a directory project), placement, track, event or year. `by: event` or `year` makes it a trend (oldest first); every answer adds winners against everyone else, with lift. Takes the same filters as search_hackathon_builds. Shares are over known values; unknown builds are counted apart. Examples: payments share event by event = facet category, value Payments, by event; which SDKs winners use = facet library, winnersOnly.",
+		inputSchema: {
+			facet: z
+				.enum([
+					"category",
+					"library",
+					"package",
+					"activity",
+					"project",
+					"placement",
+					"track",
+					"event",
+					"year",
+				])
+				.optional()
+				.describe("What to count (default category)."),
+			by: z
+				.enum(["event", "year", "placement", "track"])
+				.optional()
+				.describe(
+					"Split the counts per event or year (a trend), placement or track.",
+				),
+			value: z
+				.string()
+				.optional()
+				.describe(
+					"Report only this value (e.g. Payments, soroban-sdk), as a row even at zero; with by=event, the trend of one value.",
+				),
+			top: z
+				.number()
+				.int()
+				.min(1)
+				.max(30)
+				.optional()
+				.describe("Most values per set (default 10, or 5 with by)."),
+			...BUILD_FILTER_INPUTS,
+		},
+	},
+	async ({ facet, by, value, top, ...filters }) => {
+		const params = buildFilterParams(filters);
+		if (facet) params.set("facet", facet);
+		if (by) params.set("by", by);
+		if (value) params.set("value", value);
+		if (top !== undefined) params.set("top", String(top));
+		const qs = params.toString();
+		return asToolResult(
+			await callScout(`/api/hackathons/analyze${qs ? `?${qs}` : ""}`),
+		);
+	},
+);
+
+// 2d. review_submission: feedback on one hackathon submission from a link
+server.registerTool(
+	"review_submission",
+	{
+		title: "Review a Stellar hackathon project from its link",
+		description:
+			"Feedback on one Stellar hackathon submission from its GitHub repo or DoraHacks link, no sign-in: its stored facts (Stellar packages, category, repo activity after the event, the directory project it became with status and SCF funding), checks that each state a fact (ok null = could not be checked), the submissions closest in meaning, how crowded its category is, and the SCF pitch view over its summary (live round, funded peers, competitors, prior art). With hackathon (an event whose judging criteria Scout holds, e.g. hackmeridian-2026), each criterion comes with the evidence a judge would find in the repo, read live from GitHub, or checkable false with the reason; a GitHub repo never stored is reviewed from that read alone (stored: false). Evidence, not a verdict: an item that could not be checked is never a no. For an idea with no link → use vet_idea or scf_pitch.",
+		inputSchema: {
+			link: z
+				.string()
+				.min(3)
+				.describe(
+					"The submission's GitHub repo (owner/name or URL) or its DoraHacks link or id.",
+				),
+			hackathon: z
+				.string()
+				.min(1)
+				.optional()
+				.describe(
+					"Optional: an event slug whose judging criteria Scout holds (hackmeridian-2026). Adds review.judging and reviews a GitHub repo that is not stored from a live read; another value answers 400 with validHackathons.",
+				),
+		},
+	},
+	async ({ link, hackathon }) =>
+		asToolResult(
+			await callScout(
+				`/api/hackathons/review?link=${encodeURIComponent(link)}${hackathon ? `&hackathon=${encodeURIComponent(hackathon)}` : ""}`,
+			),
+		),
+);
+
 // 3. get_hackathon — detail for one hackathon
 server.registerTool(
 	"get_hackathon",
 	{
 		title: "Get one hackathon's full detail",
 		description:
-			"Full detail for ONE hackathon by slug — every submission with placement, prize, track, and post-hack status; derives `winners`, per-track aggregates, and a `stats` outcome funnel. DoraHacks-only events read live, degrading to a winner roster + `meta.note`. Needs an exact slug — resolve via get_hackathons first. Not for listing/browsing events → use get_hackathons.",
+			"Full detail for ONE hackathon by slug: every submission with placement, prize, track, and post-hack status; derives `winners`, per-track aggregates, and a `stats` outcome funnel. DoraHacks-only events read live, degrading to a winner roster + `meta.note`. Needs an exact slug: resolve via get_hackathons first. Not for listing/browsing events → use get_hackathons.",
 		inputSchema: {
 			slug: z
 				.string()
@@ -352,15 +502,15 @@ server.registerTool(
 server.registerTool(
 	"compare_hackathons",
 	{
-		title: "Compare 2–5 Stellar hackathons side-by-side",
+		title: "Compare 2-5 Stellar hackathons side-by-side",
 		description:
-			"Side-by-side comparison of 2–5 hackathons by slug — per-event snapshot (prize pool, submissions, winners, hackers, prize-per-winner) plus a `deltas` block flagging the spreads. Unresolved slugs return source:'not-found' without inflating counts. Requires ≥2 known slugs — resolve via get_hackathons. Not for ecosystem-wide totals across ALL events → use analyze_ecosystem.",
+			"Side-by-side comparison of 2-5 hackathons by slug: per-event snapshot (prize pool, submissions, winners, hackers, prize-per-winner) plus a `deltas` block flagging the spreads. Unresolved slugs return source:'not-found' without inflating counts. Requires ≥2 known slugs; resolve via get_hackathons. Not for ecosystem-wide totals across ALL events → use analyze_ecosystem.",
 		inputSchema: {
 			slugs: z
 				.array(z.string().min(1))
 				.min(2)
 				.max(5)
-				.describe("2–5 hackathon slugs to compare."),
+				.describe("2-5 hackathon slugs to compare."),
 		},
 	},
 	async ({ slugs }) => {
@@ -378,7 +528,7 @@ server.registerTool(
 	{
 		title: "Search Stellar builders",
 		description:
-			"The Stellar PEOPLE directory — builder profiles synced from Stellar Passport (bio, role, location, shipped projects[]), searchable by `skill` and `location`. Use to find a person to recruit, hire, or collaborate with. Not for the company/product behind a project ('who built X') → use search_projects. Profiles carry NO SCF-tier/award data (the never-populated `scfTier` response field was removed in API spec 1.7.19).",
+			"The Stellar PEOPLE directory: builder profiles synced from Stellar Passport (bio, role, location, shipped projects[]), searchable by `skill` and `location`. Use to find a person to recruit, hire, or collaborate with. Not for the company/product behind a project ('who built X') → use search_projects. Profiles carry NO SCF-tier/award data (the never-populated `scfTier` response field was removed in API spec 1.7.19).",
 		inputSchema: {
 			location: z
 				.string()
@@ -414,7 +564,7 @@ server.registerTool(
 	{
 		title: "SDF team / people index",
 		description:
-			"The Stellar Development Foundation org/people index — leadership, board of directors, and advisors (name → role → org), quoted from stellar.org/foundation/team with provenance. Use for 'who is <person>', 'what is <person>'s role at SDF', 'who leads <area>', 'who's on the SDF board'. Distinct from get_builders (GitHub-contributor profiles) — an SDF VP or board member is NOT a 'builder'. Not for doc/spec authorship → use search_research.",
+			"The Stellar Development Foundation org/people index: leadership, board of directors, and advisors (name → role → org), quoted from stellar.org/foundation/team with provenance. Use for 'who is <person>', 'what is <person>'s role at SDF', 'who leads <area>', 'who's on the SDF board'. Distinct from get_builders (GitHub-contributor profiles); an SDF VP or board member is NOT a 'builder'. Not for doc/spec authorship → use search_research.",
 		inputSchema: {
 			q: z
 				.string()
@@ -448,13 +598,22 @@ server.registerTool(
 	},
 );
 
+// view on search_projects and search_repos (API spec 1.9.96). Keep in sync
+// with VIEW_VALUES in src/lib/compact-view.ts.
+const viewInput = z
+	.enum(["full", "compact"])
+	.optional()
+	.describe(
+		"Row shape. full (the default) returns every row field, unchanged. compact is for clients whose tool output is capped or cut: each row is rebuilt from a fixed key list (identity, rank and score, and the fields that answer the usual question), and list fields left out come back as counts. This tool returns a compact page as unindented JSON; measured through it on 2026-10-23 over four default pages of search_projects and search_repos: 90,918 to 120,796 characters full, 12,806 to 24,433 compact. Every compact row carries the same keys, null where there is no value; a field missing from a compact row was left out, not found empty. meta.view (first in meta) says the page is compact and where the left-out detail is read: repeat the call without view.",
+	);
+
 // 6. search_projects — prior-art / competitor lookup
 server.registerTool(
 	"search_projects",
 	{
 		title: "Find Stellar projects, protocols & services (ecosystem directory)",
 		description:
-			"Search the curated directory of Stellar projects/products — what has been BUILT, by whom, with SCF funding, lifecycle status, links, and indexed repos inline. Answers 'who/what already exists for X' with directory records. Not for docs, standards, or how-to/reference knowledge → use search_research.",
+			"Search the curated directory of Stellar projects/products: what has been BUILT, by whom, with SCF funding, lifecycle status, links, and indexed repos inline. Answers 'who/what already exists for X' with directory records. Not for docs, standards, or how-to/reference knowledge → use search_research.",
 		inputSchema: {
 			q: z.string().optional().describe("Keyword query."),
 			category: z
@@ -463,12 +622,58 @@ server.registerTool(
 				.describe(
 					"Filter by category (Infrastructure, Tooling, User-Facing App, Asset, Protocol/Contract, Anchor, Partner Integration).",
 				),
-			hackathon: z.string().optional().describe("Filter by hackathon slug."),
+			type: z
+				.enum([
+					// Keep in sync with PROJECT_TYPES in src/lib/project-types.ts.
+					"Wallet",
+					"DEX",
+					"Lending",
+					"Bridge",
+					"Infrastructure",
+					"Payments",
+					"Anchor",
+					"SDK",
+					"Indexer",
+					"Explorer",
+					"Analytics",
+					"AI",
+					"Gaming",
+					"Education",
+					"Security",
+					"NFT",
+					"RWA",
+					"Stablecoin",
+					"Social Impact",
+					"RPC",
+					"Faucet",
+					"Card Issuing",
+					"Exchange",
+					"Oracle",
+					"Yield",
+					"Derivatives",
+				])
+				.optional()
+				.describe(
+					"Only projects whose types[] includes this product type (exact membership). type=Wallet alone lists Wallet-typed projects; combine it with q or status to scope further. Distinct from category: a project has one category but can carry several types.",
+				),
 			status: z
 				.string()
 				.optional()
 				.describe(
-					"Filter by lifecycle status (Live, Inactive, Development, Pre-Release, Pre-Development). status=Inactive lists retired/defunct projects — useful for 'is X still alive' and post-mortem queries.",
+					"Filter by lifecycle status (Live, Inactive, Development, Pre-Release). status=Inactive lists retired/defunct projects, useful for 'is X still alive' and post-mortem queries.",
+				),
+			venueRole: z
+				.enum([
+					// Keep in sync with VENUE_ROLES in src/lib/project-types.ts.
+					"amm",
+					"native-orderbook",
+					"aggregator-router",
+					"trading-ui",
+					"wallet-integrated",
+				])
+				.optional()
+				.describe(
+					"Only projects whose curated venueRole is this DEX sub-type, e.g. type=DEX with venueRole=amm lists AMMs. Rows not yet classified (venueRole null) never match, so this is the classified subset, not every venue of that kind.",
 				),
 			scfAwarded: z
 				.boolean()
@@ -481,19 +686,22 @@ server.registerTool(
 				.max(100)
 				.optional()
 				.describe("Max results (default 20)."),
+			view: viewInput,
 		},
 	},
-	async ({ q, category, hackathon, status, scfAwarded, limit }) => {
+	async ({ q, category, type, status, venueRole, scfAwarded, limit, view }) => {
 		const params = new URLSearchParams();
 		if (q) params.set("q", q);
 		if (category) params.set("category", category);
-		if (hackathon) params.set("hackathon", hackathon);
+		if (type) params.set("type", type);
 		if (status) params.set("status", status);
+		if (venueRole) params.set("venueRole", venueRole);
 		if (scfAwarded) params.set("scfAwarded", "1");
 		if (limit !== undefined) params.set("limit", String(limit));
+		if (view) params.set("view", view);
 		const qs = params.toString();
 		const result = await callScout(`/api/projects/search${qs ? `?${qs}` : ""}`);
-		return asToolResult(result);
+		return asToolResult(result, view === "compact");
 	},
 );
 
@@ -503,7 +711,7 @@ server.registerTool(
 	{
 		title: "Search the Stellar GitHub repo / code-reference index",
 		description:
-			"Search the indexed Stellar ecosystem GitHub code repos — actual source graded by repoScore (0-100: code-depth + freshness + traction + ecosystem authority), each with a `codeVerified` block once scanned: `contractInterface[]` (the Soroban ABI as full pub-fn signatures), `targetProtocol`+`protocolCaps[]` (which protocol the SDK pin targets and the CAPs defining it — advisory), `stellarDeps[]` (ecosystem dependencies from manifests — querying a package name like 'passkey-kit' surfaces its DEPENDENTS), `sdkCapabilities[]` (incl. `x402`/`mpp` agent-payment tags), symbols, version status. Rows also carry `activityState` (derived liveness), `activitySignals` (commits90d/releases; null = not captured), `knowledgeNotes[]` (dated curated facts), and `kind` + `kindBasis` (what the repo IS — archived | fork | template-or-tutorial | contract | application | hackathon | code — derived at read time; weigh a hackathon demo, a fork and a shipped product differently). Use for 'show me the code/repos for X', 'find a Soroban implementation of X', or 'which repos use package Y'. Not for products/companies and their funding/status → use search_projects.",
+			"Search the indexed Stellar ecosystem GitHub code repos: actual source graded by repoScore (0-100: code-depth + freshness + traction + ecosystem authority), each with a `codeVerified` block once scanned: `contractInterface[]` (the Soroban ABI as full pub-fn signatures), `targetProtocol`+`protocolCaps[]` (which protocol the SDK pin targets and the CAPs defining it, advisory), `stellarDeps[]` (ecosystem dependencies from manifests; querying a package name like 'passkey-kit' surfaces its DEPENDENTS), `sdkCapabilities[]` (incl. `x402`/`mpp` agent-payment tags), symbols, version status. Rows also carry `activityState` (derived liveness), `activitySignals` (commits90d/releases; null = not captured), `knowledgeNotes[]` (dated curated facts), and `kind` + `kindBasis` (what the repo IS: archived | fork | template-or-tutorial | contract | application | hackathon | code) derived at read time; weigh a hackathon demo, a fork and a shipped product differently). Use for 'show me the code/repos for X', 'find a Soroban implementation of X', or 'which repos use package Y'. Not for products/companies and their funding/status → use search_projects.",
 		inputSchema: {
 			q: z
 				.string()
@@ -516,10 +724,11 @@ server.registerTool(
 				.optional()
 				.describe("Filter by primary language (e.g. 'Rust', 'TypeScript')."),
 			activity: z
-				.enum(["active", "dormant", "archived", "unknown"])
+				// Keep in sync with REPO_ACTIVITY_STATES in src/lib/repo-grade.ts.
+				.enum(["active", "maintained", "dormant", "archived", "unknown"])
 				.optional()
 				.describe(
-					"Derived liveness filter. dormant/unknown are observations (stale/no commit date), never death verdicts.",
+					"Derived liveness filter: active (a commit within 45 days), maintained (within 180 days), dormant (a known commit older than 180 days), archived (the owner's own verdict), unknown (no commit date held). dormant and unknown are observations, never death verdicts.",
 				),
 			minScore: z
 				.number()
@@ -528,7 +737,7 @@ server.registerTool(
 				.max(100)
 				.optional()
 				.describe(
-					"Only return repos with repoScore ≥ this (0–100). Use 40+ for high-signal references.",
+					"Only return repos with repoScore ≥ this (0-100). Use 40+ for high-signal references.",
 				),
 			limit: z
 				.number()
@@ -543,18 +752,21 @@ server.registerTool(
 				.min(0)
 				.optional()
 				.describe("Pagination offset (default 0)."),
+			view: viewInput,
 		},
 	},
-	async ({ q, language, minScore, limit, offset }) => {
+	async ({ q, language, activity, minScore, limit, offset, view }) => {
 		const params = new URLSearchParams();
 		if (q) params.set("q", q);
 		if (language) params.set("language", language);
+		if (activity) params.set("activity", activity);
 		if (minScore !== undefined) params.set("minScore", String(minScore));
 		if (limit !== undefined) params.set("limit", String(limit));
 		if (offset !== undefined) params.set("offset", String(offset));
+		if (view) params.set("view", view);
 		const qs = params.toString();
 		const result = await callScout(`/api/repos/search${qs ? `?${qs}` : ""}`);
-		return asToolResult(result);
+		return asToolResult(result, view === "compact");
 	},
 );
 
@@ -564,7 +776,7 @@ server.registerTool(
 	{
 		title: "Explain a Stellar repo's internals (deep code answer)",
 		description:
-			"Source-grounded ANSWER to a deep code question about a Stellar internal or any indexed ecosystem repo — 'how does X implement/calculate Y in its code'. Routes the question to the authoritative repo (stellar-core, Horizon/go, RPC, SDKs, SEP reference impls) or the graded repo index, then DeepWiki answers from that repo's source files. Pass `repo` to pin one, or omit to auto-route. The answer carries `knowledgeNotes` (dated curated facts, present even when a DeepWiki walkthrough leads) and `repoMeta.kind` (what the repo IS). Not for discovering which repos/projects exist → use search_repos / search_projects.",
+			"Source-grounded ANSWER to a deep code question about a Stellar internal or any indexed ecosystem repo: 'how does X implement/calculate Y in its code'. Routes the question to the authoritative repo (stellar-core, Horizon/go, RPC, SDKs, SEP reference impls) or the graded repo index, then DeepWiki answers from that repo's source files. Pass `repo` to pin one, or omit to auto-route. The answer carries `knowledgeNotes` (dated curated facts, present even when a DeepWiki walkthrough leads) and `repoMeta.kind` (what the repo IS). A note that pins its value to a commit, file and symbol carries `sourceCheck` against the scanned commit (`codeVerified.scannedRef`): on a conflict the answer is the scanned value (`answerSource` stellarlight-code-scan) and the note stays as a dated record; when unknown, the note is the value on its date only. Not for discovering which repos/projects exist → use search_repos / search_projects.",
 		inputSchema: {
 			q: z
 				.string()
@@ -588,19 +800,79 @@ server.registerTool(
 	},
 );
 
+// 6d. locate_source: scored pointers into Stellar source (API spec 1.9.99; OpenZeppelin and stellar-cli commands from 1.9.106)
+server.registerTool(
+	"locate_source",
+	{
+		title:
+			"Locate where a flag, command, option default, function or interface is defined in Stellar source code",
+		description:
+			"Where in Stellar source code is X defined or implemented: scored pointers into nine allowlisted repos (stellar-core, rs-soroban-sdk, rs-soroban-env, js-stellar-sdk, stellar-rpc, quickstart, stellar-cli, soroban-examples, OpenZeppelin/stellar-contracts). Each pointer gives the file, symbol or heading, line, commit and blob sha where a CLI flag or command, config option default, SDK or host function, contract interface or trait implementation is defined, why it matched, and a pinned GitHub URL. Pointers, never file content: fetch verificationUrl to read and cite it. Ten a page, best first; truncated true means a later page holds more. `pointers: []` with total 0 = the indexed repos were searched and nothing matched; `pointers: null` = could not search (the repo is not indexed yet, which meta.note says, or the index could not be read, an HTTP 503 to retry), so never read null as no match. Not for docs, protocol text, SEPs or CAPs → use search_research; how a repo works, in prose → explain_repo; ecosystem projects' repos or code examples → search_repos.",
+		inputSchema: {
+			q: z
+				.string()
+				.min(1)
+				.max(300)
+				.describe(
+					"What to locate: a symbol, flag, option, config key, stellar-cli command or topic words (at most 300 characters), e.g. --enable-core-manual-close, getTransactions default limit or stellar contract invoke. A repo named in q (stellar-rpc, quickstart, OpenZeppelin) strongly lifts its pointers; a typed stellar-cli command lifts the module that implements it.",
+				),
+			repo: z
+				.enum([
+					// Keep in sync with SOURCE_REPOS in src/lib/source-locator.ts
+					// (the route answers 400 for any other value).
+					"stellar/stellar-core",
+					"stellar/rs-soroban-sdk",
+					"stellar/rs-soroban-env",
+					"stellar/js-stellar-sdk",
+					"stellar/stellar-rpc",
+					"stellar/quickstart",
+					"stellar/stellar-cli",
+					"stellar/soroban-examples",
+					"OpenZeppelin/stellar-contracts",
+				])
+				.optional()
+				.describe(
+					"Only this allowlisted repo, as owner/name (e.g. stellar/quickstart).",
+				),
+			kind: z
+				.enum(["file", "symbol", "heading"])
+				.optional()
+				.describe(
+					"Only this locator kind: file = the whole file; symbol = a named definition (function, type, constant, CLI flag, config option or key, environment variable); heading = a Markdown section.",
+				),
+			page: z
+				.number()
+				.int()
+				.min(1)
+				.max(2000)
+				.optional()
+				.describe(
+					"Page of 10 pointers: a whole number from 1 to 2000 (default 1).",
+				),
+		},
+	},
+	async ({ q, repo, kind, page }) => {
+		const params = new URLSearchParams({ q });
+		if (repo) params.set("repo", repo);
+		if (kind) params.set("kind", kind);
+		if (page !== undefined) params.set("page", String(page));
+		return asToolResult(await callScout(`/api/sources/locate?${params}`));
+	},
+);
+
 // 7. get_rfps — Open + closed Stellar RFPs
 server.registerTool(
 	"get_rfps",
 	{
 		title: "List Stellar RFPs (SCF-funded sponsor briefs)",
 		description:
-			"Curated Stellar RFPs / sponsor briefs (mirrors /ideas) — `open` means the sponsor brief is still soliciting; it does NOT prove the SCF proposal window accepts submissions today (check meta.scfRound.submissionWindow + currentPhase). Closed briefs are past rounds. Response carries open/closed counts, the activeQuarter, and the live SCF round + submission window (`meta.scfRound`). Answers 'what does the ecosystem want built' and where the paid work is: jobs, bounties, freelance briefs for Stellar contributors. Not for how-to-apply / SCF Handbook knowledge → use search_research.",
+			"Curated Stellar RFPs / sponsor briefs (mirrors /ideas); `open` means the sponsor brief is still soliciting; it does NOT prove the SCF proposal window accepts submissions today (check meta.scfRound.submissionWindow + currentPhase). Closed briefs are past rounds. Response carries open/closed counts, the activeQuarter, and the live SCF round + submission window (`meta.scfRound`). Answers 'what does the ecosystem want built' and where the paid work is: jobs, bounties, freelance briefs for Stellar contributors. Not for how-to-apply / SCF Handbook knowledge → use search_research.",
 		inputSchema: {
 			status: z
 				.enum(["open", "closed"])
 				.optional()
 				.describe(
-					"open = the sponsor brief is still soliciting (NOT proof the SCF submission window is open today — check meta.scfRound); closed = prior rounds.",
+					"open = the sponsor brief is still soliciting (NOT proof the SCF submission window is open today; check meta.scfRound); closed = prior rounds.",
 				),
 			quarter: z
 				.string()
@@ -632,7 +904,7 @@ server.registerTool(
 	{
 		title: "List Stellar AI skills",
 		description:
-			"Catalog of installable Stellar AI skills/tools — SDF's official skills.stellar.org set merged with curated and community entries. Each entry carries an `install` command, `kind` (skill-md | mcp-server | sdk | cli | agent-kit | tool), and repo/docs links. Answers 'what Stellar AI skills / MCP servers can I install'. Not for ONE named skill's full content → use get_skill.",
+			"Catalog of installable Stellar AI skills/tools: SDF's official skills.stellar.org set merged with curated and community entries. Each entry carries an `install` command, `kind` (skill-md | mcp-server | sdk | cli | agent-kit | tool), and repo/docs links. Answers 'what Stellar AI skills / MCP servers can I install'. Not for ONE named skill's full content → use get_skill.",
 		inputSchema: {},
 	},
 	async () => {
@@ -647,13 +919,13 @@ server.registerTool(
 	{
 		title: "Get the full content of one Stellar AI skill",
 		description:
-			"Full detail for ONE skill by slug or display name — metadata plus, for SDF official skills, the complete raw SKILL.md text (`.skill.content`, fetched live from skills.stellar.org). 404s with a hint to list skills when unknown. Use when you know the skill and need its actual instructions or install command. Not for discovering which skills exist → use list_skills.",
+			"Full detail for ONE skill by slug or display name: metadata plus, for entries whose source ships a SKILL.md, the complete raw text (`.skill.content`); metadata only otherwise. 404s with a hint to list skills when unknown. Use when you know the skill and need its actual instructions or install command. Not for discovering which skills exist → use list_skills.",
 		inputSchema: {
 			name: z
 				.string()
 				.min(1)
 				.describe(
-					"Skill name (e.g. 'soroban', 'anchors', 'agentic-payments').",
+					"Skill name (e.g. 'smart-contracts', 'agentic-payments', 'stellar-scout').",
 				),
 		},
 	},
@@ -669,7 +941,7 @@ server.registerTool(
 	{
 		title: "Get Stellar ecosystem developer activity",
 		description:
-			"Ranked list of active Stellar projects with per-project GitHub rollups (stars, open-issue backlog, last activity), plus an Electric Capital dev-count macro block ('how many active Stellar devs'). Metrics are recency/backlog signals, not commit volume — cite `meta.dataAsOf` when quoting numbers; `meta.metricDefinitions` explains each metric. Ranks PROJECTS, not people → use get_builders for individual developers.",
+			"Ranked list of active Stellar projects with per-project GitHub rollups (stars, open-issue backlog, last activity), plus an Electric Capital dev-count macro block ('how many active Stellar devs'). Metrics are recency/backlog signals, not commit volume; cite `meta.dataAsOf` when quoting numbers; `meta.metricDefinitions` explains each metric. Ranks PROJECTS, not people → use get_builders for individual developers.",
 		inputSchema: {
 			type: z
 				.string()
@@ -677,17 +949,13 @@ server.registerTool(
 				.describe(
 					"Exact project-type filter, repeatable via comma ('DEX,Lending'). Resolved filter echoed in meta.filters.type.",
 				),
-			include: z
-				.string()
-				.optional()
-				.describe(
-					"Optional comma-separated includes (e.g. 'hackathons' to surface hackathon context).",
-				),
 		},
 	},
-	async ({ include }) => {
-		const qs = include ? `?include=${encodeURIComponent(include)}` : "";
-		const result = await callScout(`/api/leaderboard${qs}`);
+	async ({ type }) => {
+		const params = new URLSearchParams();
+		if (type) params.set("type", type);
+		const qs = params.toString();
+		const result = await callScout(`/api/leaderboard${qs ? `?${qs}` : ""}`);
 		return asToolResult(result);
 	},
 );
@@ -698,7 +966,7 @@ server.registerTool(
 	{
 		title: "Get Scout API health + endpoint enumeration",
 		description:
-			"Self-describe / health endpoint — service ok + versions, per-source freshness and counts (`sources[]`), recent usage, and an enumeration of every /api/* endpoint. Cheap, no params. Use to check how fresh/large the data is or to discover endpoints. Not for the data itself → call the matching search tool.",
+			"Self-describe / health endpoint: service ok + versions, per-source freshness and counts (`sources[]`), recent usage, and an enumeration of every /api/* endpoint. Cheap, no params. Use to check how fresh/large the data is or to discover endpoints. Not for the data itself → call the matching search tool.",
 		inputSchema: {},
 	},
 	async () => {
@@ -713,7 +981,7 @@ server.registerTool(
 	{
 		title: "Submit feedback on Stellar Scout",
 		description:
-			"Write-back channel to report a Scout failure — wrong answer, missing/stale data, a bug, or a suggestion. POSTs {kind, message, context?} into the curator queue (reviewed weekly); rate-limited 6/min/IP. Use when a query returned something wrong/stale/empty that SHOULD exist. Not for finding the data you actually want → use the relevant search tool.",
+			"Write-back channel to report a Scout failure: wrong answer, missing/stale data, a bug, or a suggestion. POSTs {kind, message, context?} into the curator queue (reviewed weekly); rate-limited 6/min/IP. Use when a query returned something wrong/stale/empty that SHOULD exist. Not for finding the data you actually want → use the relevant search tool.",
 		inputSchema: {
 			kind: z
 				.enum(["bug", "missing-data", "wrong-answer", "suggestion", "other"])
@@ -723,7 +991,7 @@ server.registerTool(
 				.min(10)
 				.max(4000)
 				.describe(
-					"Describe what went wrong concretely. 10–4000 chars. Include the query + endpoint if relevant.",
+					"Describe what went wrong concretely. 10-4000 chars. Include the query + endpoint if relevant.",
 				),
 			query: z
 				.string()
@@ -765,7 +1033,7 @@ server.registerTool(
 	{
 		title: "Get Stellar project topic clusters with crowdedness scores",
 		description:
-			"Groups the active Stellar project directory into topic clusters scored on crowdedness (1–10, log-scaled) — the market-map view of saturated vs underbuilt lanes, i.e. WHERE TO BUILD. Per cluster: size, SCF funding, hackathon winners, sample projects; `dimension=category|types`. Answers 'what's crowded / where is whitespace'. Not for looking up a named project → use search_projects.",
+			"Groups the active Stellar project directory into topic clusters scored on crowdedness (1-10, log-scaled): the market-map view of saturated vs underbuilt lanes, i.e. WHERE TO BUILD. Per cluster: size, SCF funding, hackathon winners, sample projects; `dimension=category|types`. Answers 'what's crowded / where is whitespace'. Not for looking up a named project → use search_projects.",
 		inputSchema: {
 			dimension: z
 				.enum(["category", "types"])
@@ -795,7 +1063,7 @@ server.registerTool(
 	{
 		title: "Cross-event Stellar ecosystem analytics rollup",
 		description:
-			"The cross-ecosystem macro rollup — totals no single-event tool answers: hackathon totals (prize pools, hackers), SCF funding distributed (per-round + the Built/In-Progress/Abandoned funnel), and per-category distribution. Slice via `dimension=hackathons|categories|funding`. Not for per-category crowdedness/whitespace → use get_clusters.",
+			"The cross-ecosystem macro rollup; totals no single-event tool answers: hackathon totals (prize pools, hackers), SCF funding distributed (per-round + the Built/In-Progress/Abandoned funnel), and per-category distribution. Slice via `dimension=hackathons|categories|funding`. Not for per-category crowdedness/whitespace → use get_clusters.",
 		inputSchema: {
 			dimension: z
 				.enum(["all", "hackathons", "categories", "funding"])
@@ -816,7 +1084,7 @@ server.registerTool(
 	{
 		title: "Search Stellar ecosystem partners (audit firms, anchors, infra)",
 		description:
-			"The curated Stellar ecosystem partner directory — vetted service providers a builder hires or integrates: audit firms, anchors, on and off ramps (fiat on-ramp/off-ramp providers), KYC, infrastructure, tooling, wallets, legal, agencies. Filter by `type`/`sector`/`region` or free-text `q` (capability-fit ranked). Answers 'who can audit my Soroban contract / find an anchor or ramp in <region>'. Not for a built product/project → use search_projects.",
+			"The curated Stellar ecosystem partner directory; vetted service providers a builder hires or integrates: audit firms, anchors, on and off ramps (fiat on-ramp/off-ramp providers), KYC, infrastructure, tooling, wallets, legal, agencies. Filter by `type`/`sector`/`region` or free-text `q` (capability-fit ranked). Answers 'who can audit my Soroban contract / find an anchor or ramp in <region>'. Not for a built product/project → use search_projects.",
 		inputSchema: {
 			type: z
 				.string()
@@ -830,7 +1098,7 @@ server.registerTool(
 				.string()
 				.optional()
 				.describe(
-					"Free-text need, relevance-ranked by structured capability fit (assets, ramps, SEPs, country, services, region) — e.g. 'USDC off-ramp Mexico' surfaces anchors by capability, not keyword overlap.",
+					"Free-text need, relevance-ranked by structured capability fit (assets, ramps, SEPs, country, services, region), e.g. 'USDC off-ramp Mexico' surfaces anchors by capability, not keyword overlap.",
 				),
 		},
 	},
@@ -852,7 +1120,7 @@ server.registerTool(
 	{
 		title: "Get the Scout API/MCP contract changelog",
 		description:
-			"Latest-first feed of contract-affecting changes to the Scout API, MCP tools, and typed client — new/removed endpoints & tools, param/enum changes, description/routing rewrites. Filter with `since`/`limit`. Use when you cached Scout's shape earlier and want to know what moved. Not for current health / data freshness → use get_status.",
+			"Latest-first feed of contract-affecting changes to the Scout API, MCP tools, and typed client: new/removed endpoints & tools, param/enum changes, description/routing rewrites. Filter with `since`/`limit`. Use when you cached Scout's shape earlier and want to know what moved. Not for current health / data freshness → use get_status.",
 		inputSchema: {
 			since: z
 				.string()
@@ -874,6 +1142,78 @@ server.registerTool(
 		const result = await callScout(`/api/changelog${qs}`);
 		return asToolResult(result);
 	},
+);
+
+// 17-19. The one-call idea composites. Raven reaches them through the API
+// spec; until 1.3.0 an MCP client could not call them at all.
+const ideaInput = {
+	q: z
+		.string()
+		.min(3)
+		.max(200)
+		.describe(
+			"Short idea description, 3 to 200 characters (e.g. 'lending protocol for RWAs').",
+		),
+};
+
+server.registerTool(
+	"vet_idea",
+	{
+		title: "Vet a Stellar build idea",
+		description:
+			"The 'I want to build X on Stellar' check in one call: competitor repos and active directory projects in the idea's vertical, their maturity from verified evidence (audits, live on-chain usage), hackathon prior art, the vertical's supply-side gap and SCF funding presence. Every block carries its basis. A gap is supply, not demand. Not for one named project → use search_projects.",
+		inputSchema: ideaInput,
+	},
+	async ({ q }) =>
+		asToolResult(await callScout(`/api/vet-idea?q=${encodeURIComponent(q)}`)),
+);
+
+server.registerTool(
+	"hackathon_brief",
+	{
+		title: "Hackathon brief for an idea",
+		description:
+			"A hackathon team's first hour in one call: the vet-idea view, prize winners and other builds that already tried the idea, starter repos with a trust summary, verified mainnet contracts for its code domain, and SCF funding after the event, plus what not to claim. No verdicts. Not for listing events → use get_hackathons.",
+		inputSchema: ideaInput,
+	},
+	async ({ q }) =>
+		asToolResult(
+			await callScout(`/api/hackathon-brief?q=${encodeURIComponent(q)}`),
+		),
+);
+
+server.registerTool(
+	"scf_pitch",
+	{
+		title: "Prepare a Stellar Community Fund pitch",
+		description:
+			"SCF application prep in one call: the live round state and deadline (never asserted on a failed fetch), funded projects in the idea's vertical with recorded award totals, the vet-idea view, and pitch angles that each name the fact they stand on. Writes no prose for you. Not for browsing sponsor briefs → use get_rfps.",
+		inputSchema: ideaInput,
+	},
+	async ({ q }) =>
+		asToolResult(await callScout(`/api/scf-pitch?q=${encodeURIComponent(q)}`)),
+);
+
+// 20. get_hackathon_submission — one stored submission in full
+server.registerTool(
+	"get_hackathon_submission",
+	{
+		title: "Read one Stellar hackathon submission",
+		description:
+			"One stored hackathon submission in full: the team's own write-up (a claim, not proof), DoraHacks summary, self-reported tags, event, placement and prize, links, and `project`, the directory project that lists its exact repo. Pass the `id` from search_hackathon_builds or hackathon_brief, or the number in a dorahacks.io/buidl link. For finding submissions on a topic → use search_hackathon_builds.",
+		inputSchema: {
+			id: z
+				.string()
+				.min(1)
+				.describe(
+					"dorahacks-buidl-<n> from search_hackathon_builds, or the bare <n>.",
+				),
+		},
+	},
+	async ({ id }) =>
+		asToolResult(
+			await callScout(`/api/hackathons/builds/${encodeURIComponent(id)}`),
+		),
 );
 
 // ─────────────────────────────────────────────────────────────────────────────

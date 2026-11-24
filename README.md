@@ -2,7 +2,7 @@
 
 > Stellar Scout, as an MCP server. Use it in Claude desktop, Cursor, ChatGPT, Gemini, Cline, Continue, Zed, or any [Model Context Protocol](https://modelcontextprotocol.io) client.
 
-Exposes 19 tools that wrap [stellarlight.xyz](https://stellarlight.xyz)'s public APIs — the same data that powers the [`stellar-scout`](https://stellarlight.xyz/scout) skill, available as native callable functions for any MCP-compatible AI client.
+Exposes 28 tools that wrap [stellarlight.xyz](https://stellarlight.xyz)'s public APIs: the same data that powers the [`stellar-scout`](https://stellarlight.xyz/scout) skill, available as native callable functions for any MCP-compatible AI client.
 
 ```
 npx @stellar-light/scout-mcp
@@ -68,7 +68,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 }
 ```
 
-Restart Claude Desktop. The 19 Scout tools appear in the slash-menu.
+Restart Claude Desktop, and Claude can call every Scout tool.
 
 ### Cursor
 
@@ -107,24 +107,32 @@ pnpm build
 
 ## Tools
 
-All 20 tools wrap stellarlight.xyz public APIs. They're rate-limited but require no API key.
+All 28 tools wrap stellarlight.xyz public APIs. They're rate-limited but require no API key.
 
 | Tool | What it does |
 |------|--------------|
-| `search_research` | Vector search over the Stellar research corpus (SEPs, SCF Handbook, dev docs, papers, lumenloop, audits, incident reports, EC reports, core/CLI/SDK release notes). Use `source=audit` for security, `source=release` for what-shipped-when, or the `auditor`/`protocol`/`severity` filters (they imply audit scope). |
+| `search_research` | Vector search over the Stellar research corpus (SEPs, SCF Handbook, dev docs, papers, lumenloop, audits, incident reports, EC reports, Stellar Limits Proposals, core/CLI/SDK release notes). Use `source=audit` for security, `source=release` for what-shipped-when, or the `auditor`/`protocol`/`severity` filters (they imply audit scope). |
 | `get_audits` | Enumerable security-audit registry — one row per report with normalized auditor, date, and a verified project link. 'List all audits for X' / 'what has firm Y audited'. Absence ≠ unaudited. |
 | `get_hackathons` | List curated Stellar hackathons + live DoraHacks events. Status-scoped queries include fallback channels when empty. |
 | `get_hackathon` | One hackathon's full detail (submissions, winners, prize tracks, status funnel). |
+| `search_hackathon_builds` | Prior art over every Stellar hackathon submission on DoraHacks: has anyone built X? Winners first; `project` names the directory project a build became. |
+| `get_hackathon_submission` | One stored submission in full: the team's write-up, self-reported tags, placement, links and the directory project it became. |
+| `review_submission` | Feedback on one hackathon submission from its GitHub or DoraHacks link: its facts, checks, the closest submissions and the SCF pitch view. With `hackathon`, each of that event's judging criteria with the evidence in the repo, read live, also for a repo never stored. |
+| `analyze_hackathon_submissions` | Counts and trends over every submission: categories, Stellar packages, activity after the event, event by event, with winners against everyone else. |
+| `vet_idea` | One-call idea check: competitors, maturity, hackathon prior art, the vertical's supply-side gap and SCF funding. |
+| `hackathon_brief` | A hackathon team's first hour: prior art (winners first), starter repos with trust summaries, live contracts, SCF funding after the event. |
+| `scf_pitch` | SCF application prep: live round and deadline, funded peers with award totals, and pitch angles that name their facts. |
 | `compare_hackathons` | Side-by-side comparison of 2–5 hackathons with delta notes. |
 | `get_builders` | Stellar Passport builder directory (GitHub contributors). Filter by location or skill. |
 | `get_people` | SDF team/people index — leadership, board of directors, advisors (name → role → org). Filter by `q` or `section`. |
-| `search_projects` | Prior-art / competitor lookup across 741+ curated projects. Tiered match-mode (strict → loose → majority) surfaced in `.meta.matchMode`. |
-| `search_repos` | Code-reference index: ~1,900 indexed-and-scored Stellar GitHub repos ranked by repoScore. Synonym expansion + `language` / `minScore` filters. The repo layer beneath the project directory. |
+| `search_projects` | Prior-art / competitor lookup across the curated project directory (live count in `get_status`). Tiered match-mode (strict → loose → majority) surfaced in `.meta.matchMode`. `category` / `type` / `status` / `venueRole` / `scfAwarded` filters; `view=compact` for clients that cut long outputs. |
+| `search_repos` | Code-reference index of indexed-and-scored Stellar GitHub repos (live count in `get_status`), ranked by repoScore. Synonym expansion + `language` / `activity` / `minScore` filters; `view=compact` for clients that cut long outputs. The repo layer beneath the project directory. |
 | `explain_repo` | Architectural explainer for one Stellar GitHub repo — structure, entry points, and key modules. |
+| `locate_source` | Where in Stellar source code a CLI flag or command, config option default, SDK or host function, contract interface or trait implementation is defined: scored pointers (file, symbol or heading, line, commit, pinned GitHub URL) into nine allowlisted repos (eight Stellar repos and OpenZeppelin/stellar-contracts), never file content. `repo` / `kind` / `page` filters. `pointers: []` = searched, no match; `null` = could not search. |
 | `get_rfps` | Open + closed Stellar RFPs (SCF-funded sponsor briefs). Quarter-aware. |
-| `list_skills` | Catalog of [skills.stellar.org](https://skills.stellar.org)'s 7 official skills. |
-| `get_skill` | Full content of one SDF skill. |
-| `get_leaderboard` | Ecosystem dev activity (28-day active devs, commits, peer L1 comparison). |
+| `list_skills` | Catalog of Stellar agent skills: the official [skills.stellar.org](https://skills.stellar.org) set plus community and Stellar Light skills. |
+| `get_skill` | One catalog entry: full SKILL.md content where its source ships one, metadata only otherwise. |
+| `get_leaderboard` | Ecosystem dev activity (28-day active devs, commits, peer L1 comparison). `type` filter (project types, comma-separated). |
 | `get_status` | Scout API health + freshness per data source + endpoint enumeration. |
 | `submit_feedback` | In-skill feedback loop. Lands in stellarlight's curator queue. |
 | `get_clusters` | Project topic clusters with log-scaled crowdedness scores 1–10. |
@@ -140,7 +148,7 @@ Optional environment variables:
 
 ```
 SCOUT_API_BASE       # API base URL (default: https://stellarlight.xyz)
-SCOUT_USER_AGENT     # User-Agent sent on each call (default: stellar-scout-mcp/1.0.0)
+SCOUT_USER_AGENT     # User-Agent sent on each call (default: stellar-scout-mcp/<package version>)
 ```
 
 Useful for local dev when running stellarlight against `http://localhost:3000`.
@@ -169,5 +177,5 @@ MIT. Built as a public good for Stellar builders by [stellarlight.xyz](https://s
 
 - [stellarlight.xyz/scout](https://stellarlight.xyz/scout) — the Scout landing page
 - [GitHub: Stellar-Light/stellar-scout](https://github.com/Stellar-Light/stellar-scout) — the SKILL.md mirror
-- [skills.stellar.org](https://skills.stellar.org) — SDF's 7 official Stellar skills
+- [skills.stellar.org](https://skills.stellar.org): SDF's official Stellar skills (`list_skills` returns the current set: the entries whose `source` is `sdf`)
 - [Model Context Protocol](https://modelcontextprotocol.io) — the spec this implements
